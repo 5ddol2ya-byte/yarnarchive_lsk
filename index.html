@@ -1,0 +1,325 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>나의 실 도감</title>
+<style>
+:root{--bg:#faf7f3;--pink:#bb8794;--ink:#51434a;--line:#eadfe2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,"Apple SD Gothic Neo",sans-serif}
+header{background:#fff;padding:28px;text-align:center;border-bottom:1px solid var(--line)}
+h1{margin:0;font-size:28px}
+header p,.muted{color:#98868c;font-size:13px}
+main{max-width:1100px;margin:auto;padding:20px}
+button,input,select{font:inherit;padding:11px;border:1px solid var(--line);border-radius:11px;background:white;color:var(--ink)}
+button{cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+.primary{background:var(--pink);color:white;border:0}
+.toolbar,.stats{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+.toolbar input{flex:1;min-width:140px}
+.stat{background:white;flex:1;min-width:110px;border-radius:15px;padding:17px}
+.stat b{display:block;font-size:25px;margin-top:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
+.card,.panel{background:white;border:1px solid var(--line);border-radius:17px;overflow:hidden}
+.card img{width:100%;height:180px;object-fit:cover;background:#f1e8e9}
+.body{padding:15px}
+.body h3{margin:6px 0}
+.tag{display:inline-block;background:#f7e9ed;padding:5px 9px;border-radius:15px;font-size:12px}
+.actions{display:flex;gap:7px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.actions button{padding:7px 12px}
+dialog{border:0;border-radius:20px;width:min(96vw,850px);max-height:92vh;overflow:auto;padding:22px}
+dialog::backdrop{background:#0008}
+.upload{border:2px dashed #dfbfc8;padding:28px;text-align:center;border-radius:15px;background:#fdf8fa}
+.upload input{max-width:100%}
+.review{display:grid;grid-template-columns:110px 1fr;gap:15px;border:1px solid var(--line);padding:12px;margin:12px 0;border-radius:14px}
+.review img{width:110px;height:130px;object-fit:cover;border-radius:9px}
+.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.fields label{font-size:12px}
+.fields input,.fields select{width:100%;margin-top:4px;padding:8px}
+.progress{height:9px;background:#eee;border-radius:10px;overflow:hidden;margin:12px 0}
+.bar{height:100%;background:var(--pink);width:0%;transition:width .2s}
+@media(max-width:550px){.review{grid-template-columns:1fr}.review img{width:100%;height:150px}.fields{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+<h1>🧶 나의 실 도감</h1>
+<p>MY YARN ARCHIVE · 실을 모으고 기록하는 공간</p>
+</header>
+<main>
+<div class="stats">
+<div class="stat">등록된 실<b id="count">0</b></div>
+<div class="stat">보유 수량<b id="total">0</b></div>
+<div class="stat">브랜드<b id="brands">0</b></div>
+</div>
+<div class="toolbar">
+<input id="search" placeholder="브랜드 · 실 이름 검색">
+<select id="filterWeight"><option value="">모든 굵기</option></select>
+<select id="filterColor"><option value="">모든 색상</option></select>
+<button class="primary" onclick="openUpload()">+ 사진 일괄 등록</button>
+</div>
+<p id="message" class="muted"></p>
+<section id="gallery" class="grid"></section>
+</main>
+
+<dialog id="uploadDialog">
+<h2>🧶 실 사진 일괄 등록</h2>
+<p class="muted">사진 한 장을 실 한 개로 분석해요. 동일한 실도 각각 등록합니다.</p>
+<div class="upload">
+<p>📸 실 라벨 사진을 선택해 주세요</p>
+<input type="file" id="photos" accept="image/*" multiple>
+<p class="muted">최대 20장 · 각 4MB 이하 · JPG/PNG/WEBP</p>
+</div>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<p id="progressText" class="muted">사진을 선택해 주세요.</p>
+<div class="toolbar">
+<button id="analyzeBtn" class="primary" onclick="analyzeAll()">✨ 전체 AI 분석</button>
+<button onclick="document.getElementById('uploadDialog').close()">닫기</button>
+</div>
+<div id="reviews"></div>
+<div class="toolbar">
+<button id="saveAllBtn" class="primary" onclick="saveAll()" style="display:none">확인한 실 전체 저장</button>
+</div>
+</dialog>
+
+<script>
+// Apps Script 배포 후 /exec 주소를 입력하세요.
+const API_URL="YOUR_APPS_SCRIPT_WEB_APP_URL";
+const WEIGHTS=["미분류","Lace","Fingering","Sport","DK","Worsted","Aran","Bulky","Super Bulky"];
+const FIELDS=["brand","name","color","colorCode","weight","fiber","grams","meters","needle","quantity"];
+const LABELS=["브랜드","실 이름","색상","색상번호","굵기","소재","중량(g)","길이(m)","권장 바늘","보유 수량"];
+const $=id=>document.getElementById(id);
+let yarns=[],items=[],busy=false;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const uid=()=>crypto.randomUUID();
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function configured(){if(API_URL.startsWith("YOUR_"))throw Error("API_URL에 Apps Script 주소를 입력하세요.");}
+
+function get(action){
+ configured();
+ return new Promise((resolve,reject)=>{
+  const callback="yarnCallback"+Date.now()+Math.floor(Math.random()*100000);
+  const script=document.createElement("script");
+  let done=false;
+  const finish=(error,data)=>{
+   if(done)return;done=true;
+   clearTimeout(timer);delete window[callback];script.remove();
+   error?reject(error):resolve(data);
+  };
+  const timer=setTimeout(()=>finish(Error("응답 시간 초과")),20000);
+  window[callback]=data=>finish(null,data);
+  script.onerror=()=>finish(Error("서버 연결 실패"));
+  script.src=API_URL+"?action="+encodeURIComponent(action)+"&callback="+callback;
+  document.body.appendChild(script);
+ });
+}
+
+async function post(action,payload){
+ configured();
+ // GAS ContentService 교차 출처 제한 때문에
+ // POST 접수 후 requestId로 처리 결과를 조회합니다.
+ await fetch(API_URL,{
+  method:"POST",mode:"no-cors",
+  headers:{"Content-Type":"application/x-www-form-urlencoded"},
+  body:new URLSearchParams({action,payload:JSON.stringify(payload)})
+ });
+}
+
+async function task(action,payload){
+ const requestId=uid();
+ await post(action,{...payload,requestId});
+ for(let i=0;i<35;i++){
+  await sleep(1200);
+  const r=await get("result_"+requestId);
+  if(r.status==="done")return r;
+  if(r.status==="error")throw Error(r.error);
+ }
+ throw Error("처리 결과 확인 시간이 초과됐습니다. 시트를 확인하세요.");
+}
+
+async function load(){
+ try{
+  const r=await get("list");
+  if(r.error)throw Error(r.error);
+  yarns=r.yarns||[];
+  $("message").textContent="";
+  render();
+ }catch(e){$("message").textContent=e.message;}
+}
+
+function render(){
+ const q=$("search").value.toLowerCase();
+ const oldW=$("filterWeight").value,oldC=$("filterColor").value;
+ $("filterWeight").innerHTML='<option value="">모든 굵기</option>'+
+  WEIGHTS.map(w=>`<option>${w}</option>`).join("");
+ $("filterWeight").value=oldW;
+ const colors=[...new Set(yarns.map(y=>y.color).filter(Boolean))].sort();
+ $("filterColor").innerHTML='<option value="">모든 색상</option>'+
+  colors.map(c=>`<option>${esc(c)}</option>`).join("");
+ $("filterColor").value=colors.includes(oldC)?oldC:"";
+ $("count").textContent=yarns.length;
+ $("total").textContent=yarns.reduce((s,y)=>s+Number(y.quantity||0),0);
+ $("brands").textContent=new Set(yarns.map(y=>y.brand).filter(Boolean)).size;
+ const found=yarns.filter(y=>
+  (String(y.brand||"")+" "+String(y.name||"")).toLowerCase().includes(q)&&
+  (!oldW||y.weight===oldW)&&(!oldC||y.color===oldC));
+ $("gallery").innerHTML=found.map(y=>`
+ <article class="card">
+ ${y.imageUrl?`<img src="${esc(y.imageUrl)}" alt="실 사진">`:
+ '<div style="height:180px;display:grid;place-items:center;font-size:60px">🧶</div>'}
+ <div class="body">
+ <span class="muted">${esc(y.brand)}</span>
+ <h3>${esc(y.name||"이름 없는 실")}</h3>
+ <span class="tag">${esc(y.weight||"미분류")}</span>
+ <p class="muted">${esc(y.color)} · ${esc(y.fiber)}</p>
+ <p class="muted">${esc(y.grams)}g / ${esc(y.meters)}m</p>
+ <div class="actions">
+ <button onclick='stock(${JSON.stringify(y.id)},-1)'>−</button>
+ <b>${Number(y.quantity||0)}볼</b>
+ <button onclick='stock(${JSON.stringify(y.id)},1)'>+</button>
+ </div></div></article>`).join("")||"<p>등록된 실이 없습니다.</p>";
+}
+
+function openUpload(){
+ if(busy)return;
+ items=[];
+ $("photos").value="";
+ $("reviews").innerHTML="";
+ $("bar").style.width="0%";
+ $("progressText").textContent="사진을 선택해 주세요.";
+ $("saveAllBtn").style.display="none";
+ $("uploadDialog").showModal();
+}
+
+function readImage(file){
+ return new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(reader.result);
+  reader.onerror=()=>reject(Error("사진 읽기 실패"));
+  reader.readAsDataURL(file);
+ });
+}
+
+async function analyzeAll(){
+ if(busy)return;
+ const files=[...$("photos").files];
+ if(!files.length)return alert("사진을 선택해 주세요.");
+ if(files.length>20)return alert("한 번에 최대 20장까지 선택할 수 있어요.");
+ if(files.some(f=>f.size>4*1024*1024))return alert("4MB를 넘는 사진이 있어요.");
+ busy=true;$("analyzeBtn").disabled=true;
+ $("reviews").innerHTML="";
+ items=[];
+ for(let i=0;i<files.length;i++){
+  const file=files[i];
+  $("progressText").textContent=`${i+1}/${files.length} 분석 중: ${file.name}`;
+  try{
+   const image=await readImage(file);
+   const r=await task("analyze",{image});
+   items.push({id:uid(),image,data:{
+    ...r.data,quantity:1
+   },error:""});
+  }catch(e){
+   const image=await readImage(file);
+   items.push({id:uid(),image,data:{quantity:1,weight:"미분류"},error:e.message});
+  }
+  $("bar").style.width=((i+1)/files.length*100)+"%";
+  renderReviews();
+ }
+ busy=false;$("analyzeBtn").disabled=false;
+ $("progressText").textContent=`${files.length}장 처리 완료 · 내용을 확인하세요.`;
+ $("saveAllBtn").style.display="inline-block";
+}
+
+function renderReviews(){
+ $("reviews").innerHTML=items.map((item,i)=>`
+ <div class="review" data-index="${i}">
+ <img src="${item.image}" alt="업로드 사진">
+ <div>
+ <b>${i+1}. ${esc(item.data.name||"실 정보 확인 필요")}</b>
+ ${item.error?`<p class="muted">⚠ ${esc(item.error)} · 직접 입력하거나 재분석하세요.</p>`:""}
+ <div class="fields">
+ ${FIELDS.map((f,j)=>`<label>${LABELS[j]}
+ ${f==="weight"?
+ `<select data-field="${f}">${WEIGHTS.map(w=>`<option value="${w}" ${item.data.weight===w?"selected":""}>${w}</option>`).join("")}</select>`:
+ `<input data-field="${f}" ${["grams","meters","quantity"].includes(f)?'type="number" min="0"':'type="text"'} value="${esc(item.data[f]??"")}">`}
+ </label>`).join("")}
+ </div>
+ <div class="actions">
+ <button onclick="retry(${i})">AI 재분석</button>
+ <button onclick="removeItem(${i})">제외</button>
+ </div></div></div>`).join("");
+}
+
+function syncReviews(){
+ document.querySelectorAll(".review").forEach(el=>{
+  const i=Number(el.dataset.index);
+  el.querySelectorAll("[data-field]").forEach(input=>{
+   items[i].data[input.dataset.field]=input.value;
+  });
+ });
+}
+function removeItem(i){
+ syncReviews();items.splice(i,1);renderReviews();
+}
+async function retry(i){
+ if(busy)return;
+ syncReviews();busy=true;
+ try{
+  const r=await task("analyze",{image:items[i].image});
+  items[i].data={...items[i].data,...r.data};
+  items[i].error="";
+ }catch(e){items[i].error=e.message;}
+ busy=false;renderReviews();
+}
+
+async function saveAll(){
+ if(busy)return;
+ syncReviews();
+ if(!items.length)return alert("저장할 실이 없어요.");
+ if(items.some(x=>!String(x.data.name||"").trim()))
+  return alert("이름이 비어 있는 실이 있어요. 모두 확인해 주세요.");
+ if(!confirm(`${items.length}개 실을 각각 등록할까요?`))return;
+ busy=true;$("saveAllBtn").disabled=true;
+ let saved=0;
+ for(let i=0;i<items.length;i++){
+  $("progressText").textContent=`저장 중 ${i+1}/${items.length}`;
+  try{
+   await task("save",{
+    id:items[i].id,
+    image:items[i].image,
+    data:items[i].data
+   });
+   saved++;
+  }catch(e){
+   items[i].error="저장 확인 필요: "+e.message;
+  }
+ }
+ busy=false;$("saveAllBtn").disabled=false;
+ $("progressText").textContent=`${saved}/${items.length}개 저장 확인 완료`;
+ if(saved===items.length){
+  $("uploadDialog").close();
+ }else{
+  renderReviews();
+  alert("일부 저장을 확인하지 못했습니다. 재시도 전에 시트를 확인하세요.");
+ }
+ await load();
+}
+
+async function stock(id,delta){
+ const y=yarns.find(x=>x.id===id);
+ if(!y||Number(y.quantity)+delta<0)return;
+ try{
+  await task("stock",{id,delta});
+  await load();
+ }catch(e){alert(e.message);}
+}
+
+$("search").oninput=render;
+$("filterWeight").onchange=render;
+$("filterColor").onchange=render;
+load();
+</script>
+</body>
+</html>
