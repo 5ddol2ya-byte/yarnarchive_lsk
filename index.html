@@ -1,0 +1,303 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>나의 실 도감</title>
+<style>
+:root{--bg:#faf7f2;--ink:#443a36;--accent:#b47e86;--line:#e9ded8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,"Apple SD Gothic Neo",sans-serif}
+header{padding:26px 20px;background:#fff;border-bottom:1px solid var(--line);text-align:center}
+h1{margin:0;font-size:28px}
+header p{color:#96827d;font-size:13px}
+main{max-width:1050px;margin:auto;padding:22px}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0}
+input,select,button,textarea{font:inherit;border-radius:12px;padding:12px;border:1px solid var(--line);background:white;color:var(--ink)}
+input[type=search]{flex:1;min-width:180px}
+button{cursor:pointer}
+.primary{background:var(--accent);color:white;border:0}
+.stats{display:flex;gap:12px;flex-wrap:wrap}
+.stat{background:white;padding:18px;border-radius:16px;flex:1;min-width:130px}
+.stat b{display:block;font-size:24px;margin-top:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:18px}
+.card{background:white;border-radius:18px;overflow:hidden;border:1px solid var(--line)}
+.card img{width:100%;height:190px;object-fit:cover;background:#eee6e2}
+.card-body{padding:15px}
+.card h3{margin:4px 0}
+.muted{font-size:13px;color:#95837d}
+.tag{display:inline-block;background:#f3e4e4;padding:5px 10px;border-radius:20px;font-size:12px}
+.actions{display:flex;align-items:center;gap:7px;margin-top:12px}
+.actions button{padding:7px 12px}
+dialog{border:0;border-radius:20px;padding:24px;width:min(95vw,520px);max-height:90vh;overflow:auto}
+dialog::backdrop{background:#0008}
+.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.formgrid label{font-size:12px}
+.formgrid input,.formgrid select{width:100%;margin-top:5px}
+.full{grid-column:1/-1}
+#preview{max-width:150px;max-height:150px;object-fit:cover}
+#status{font-size:13px;margin:12px 0;color:#846d68}
+</style>
+</head>
+<body>
+<header>
+<h1>🧶 나의 실 도감</h1>
+<p>My Yarn Archive · 내가 가진 실을 한눈에</p>
+</header>
+<main>
+<div class="stats">
+<div class="stat">등록된 실 종류<b id="types">0</b></div>
+<div class="stat">전체 보유 수량<b id="total">0</b></div>
+<div class="stat">등록된 브랜드<b id="brands">0</b></div>
+</div>
+
+<div class="toolbar">
+<input type="search" id="search" placeholder="실 이름 또는 브랜드 검색">
+<select id="weightFilter">
+<option value="">모든 굵기</option>
+<option>Lace</option><option>Fingering</option>
+<option>Sport</option><option>DK</option>
+<option>Worsted</option><option>Aran</option>
+<option>Bulky</option><option>Super Bulky</option>
+<option>미분류</option>
+</select>
+<select id="colorFilter"><option value="">모든 색상</option></select>
+<button class="primary" onclick="openEditor()">+ 실 등록</button>
+</div>
+<div id="status"></div>
+<section id="cards" class="grid"></section>
+</main>
+
+<dialog id="editor">
+<h2 id="dialogTitle">새 실 등록</h2>
+<p class="muted">라벨 사진을 올리고 AI 분석을 누르세요.</p>
+<input id="photo" type="file" accept="image/*">
+<button onclick="analyze()" id="analyzeBtn">✨ AI 라벨 분석</button>
+<p><img id="preview" alt="사진 미리보기"></p>
+<div class="formgrid">
+<label>브랜드<input id="brand"></label>
+<label>실 이름<input id="name"></label>
+<label>색상<input id="color"></label>
+<label>색상 번호<input id="colorCode"></label>
+<label>굵기<select id="weight">
+<option>미분류</option><option>Lace</option>
+<option>Fingering</option><option>Sport</option>
+<option>DK</option><option>Worsted</option>
+<option>Aran</option><option>Bulky</option>
+<option>Super Bulky</option>
+</select></label>
+<label>소재<input id="fiber"></label>
+<label>중량 (g)<input id="grams" type="number"></label>
+<label>길이 (m)<input id="meters" type="number"></label>
+<label>권장 바늘<input id="needle"></label>
+<label>보유 수량<input id="quantity" type="number" min="0" value="1"></label>
+<label class="full">사진 URL<input id="imageUrl" placeholder="자동 저장 또는 직접 입력"></label>
+</div>
+<p class="muted" id="editorStatus"></p>
+<div class="toolbar">
+<button class="primary" onclick="saveYarn()">저장하기</button>
+<button onclick="document.getElementById('editor').close()">취소</button>
+</div>
+</dialog>
+
+<script>
+// 배포 후 Apps Script 웹 앱 URL 입력
+const API_URL = "YOUR_APPS_SCRIPT_URL";
+
+let yarns = [];
+let editingId = null;
+let photoData = "";
+
+const $ = id => document.getElementById(id);
+const fields = [
+ "brand","name","color","colorCode","weight",
+ "fiber","grams","meters","needle","quantity","imageUrl"
+];
+
+function safe(s){
+ return String(s??"").replace(/[&<>"']/g,c=>({
+  "&":"&amp;","<":"&lt;",">":"&gt;",
+  '"':"&quot;","'":"&#39;"
+ })[c]);
+}
+
+function jsonp(action){
+ return new Promise((resolve,reject)=>{
+  if(API_URL.includes("YOUR_")) return reject(Error("연결 URL을 설정하세요."));
+  const cb="yarnCallback"+Date.now();
+  const script=document.createElement("script");
+  const timeout=setTimeout(()=>finish(Error("연결 시간 초과")),15000);
+  function finish(error,data){
+   clearTimeout(timeout);
+   delete window[cb];
+   script.remove();
+   error?reject(error):resolve(data);
+  }
+  window[cb]=data=>finish(null,data);
+  script.onerror=()=>finish(Error("데이터 불러오기 실패"));
+  script.src=API_URL+"?action="+encodeURIComponent(action)+"&callback="+cb;
+  document.body.appendChild(script);
+ });
+}
+
+async function post(action,data){
+ if(API_URL.includes("YOUR_")) throw Error("연결 URL을 설정하세요.");
+ // Apps Script의 교차 출처 응답은 읽을 수 없으므로
+ // 쓰기 후 다시 목록을 읽어 실제 반영 여부를 확인합니다.
+ await fetch(API_URL,{
+  method:"POST",mode:"no-cors",
+  headers:{"Content-Type":"application/x-www-form-urlencoded"},
+  body:new URLSearchParams({action,payload:JSON.stringify(data)})
+ });
+}
+
+async function load(){
+ try{
+  const result=await jsonp("list");
+  if(result.error)throw Error(result.error);
+  yarns=result.yarns||[];
+  $("status").textContent="";
+  render();
+ }catch(e){$("status").textContent=e.message;}
+}
+
+function render(){
+ const q=$("search").value.toLowerCase();
+ const w=$("weightFilter").value;
+ const c=$("colorFilter").value;
+ const colors=[...new Set(yarns.map(y=>y.color).filter(Boolean))].sort();
+ $("colorFilter").innerHTML='<option value="">모든 색상</option>'+
+  colors.map(v=>`<option value="${safe(v)}">${safe(v)}</option>`).join("");
+ $("colorFilter").value=colors.includes(c)?c:"";
+ const filtered=yarns.filter(y=>
+  (y.name+" "+y.brand).toLowerCase().includes(q)&&
+  (!w||y.weight===w)&&
+  (!c||y.color===c)
+ );
+ $("types").textContent=yarns.length;
+ $("total").textContent=yarns.reduce((n,y)=>n+Number(y.quantity||0),0);
+ $("brands").textContent=new Set(yarns.map(y=>y.brand).filter(Boolean)).size;
+ $("cards").innerHTML=filtered.map(y=>`
+  <article class="card">
+   ${y.imageUrl?`<img src="${safe(y.imageUrl)}" alt="실 사진">`:
+   '<div style="height:190px;display:grid;place-items:center;font-size:60px">🧶</div>'}
+   <div class="card-body">
+    <div class="muted">${safe(y.brand)}</div>
+    <h3>${safe(y.name||"이름 없는 실")}</h3>
+    <span class="tag">${safe(y.weight||"미분류")}</span>
+    <p class="muted">${safe(y.color)} · ${safe(y.fiber)}</p>
+    <p class="muted">${safe(y.grams)}g / ${safe(y.meters)}m</p>
+    <div class="actions">
+     <button onclick='changeStock(${JSON.stringify(y.id)},-1)'>−</button>
+     <b>${Number(y.quantity||0)}볼</b>
+     <button onclick='changeStock(${JSON.stringify(y.id)},1)'>+</button>
+     <button onclick='openEditor(${JSON.stringify(y.id)})'>수정</button>
+    </div>
+   </div>
+  </article>`).join("")||"<p>등록된 실이 없습니다.</p>";
+}
+
+function openEditor(id=null){
+ editingId=id;
+ fields.forEach(f=>$(f).value="");
+ $("weight").value="미분류";
+ $("quantity").value=1;
+ $("photo").value="";
+ $("preview").removeAttribute("src");
+ $("editorStatus").textContent="";
+ photoData="";
+ const y=yarns.find(x=>x.id===id);
+ if(y){
+  fields.forEach(f=>$(f).value=y[f]??"");
+  if(y.imageUrl)$("preview").src=y.imageUrl;
+ }
+ $("dialogTitle").textContent=y?"실 정보 수정":"새 실 등록";
+ $("editor").showModal();
+}
+
+function readPhoto(){
+ return new Promise((resolve,reject)=>{
+  const file=$("photo").files[0];
+  if(!file)return resolve("");
+  if(file.size>4*1024*1024)return reject(Error("사진은 4MB 이하로 선택해 주세요."));
+  const reader=new FileReader();
+  reader.onload=()=>resolve(reader.result);
+  reader.onerror=()=>reject(Error("사진 읽기 실패"));
+  reader.readAsDataURL(file);
+ });
+}
+
+async function analyze(){
+ const btn=$("analyzeBtn");
+ btn.disabled=true;
+ $("editorStatus").textContent="사진 분석 요청 중...";
+ try{
+  photoData=await readPhoto();
+  if(!photoData)throw Error("사진을 선택하세요.");
+  $("preview").src=photoData;
+  const requestId=crypto.randomUUID();
+  await post("analyze",{requestId,image:photoData});
+  let result;
+  for(let i=0;i<12;i++){
+   await new Promise(r=>setTimeout(r,2000));
+   result=await jsonp("analysis_"+requestId);
+   if(result.status==="done")break;
+   if(result.status==="error")throw Error(result.error);
+  }
+  if(result?.status!=="done")throw Error("분석 결과 대기 시간이 초과되었습니다.");
+  Object.entries(result.data).forEach(([key,value])=>{
+   if($(key)&&value!==null&&value!==undefined)$(key).value=value;
+  });
+  $("editorStatus").textContent="분석 완료! 내용을 확인하고 저장하세요.";
+ }catch(e){$("editorStatus").textContent=e.message;}
+ finally{btn.disabled=false;}
+}
+
+async function saveYarn(){
+ const data=Object.fromEntries(fields.map(f=>[f,$(f).value]));
+ data.id=editingId||crypto.randomUUID();
+ data.quantity=Math.max(0,Number(data.quantity)||0);
+ if(!data.name.trim())return alert("실 이름을 입력하세요.");
+ $("editorStatus").textContent="저장 중...";
+ try{
+  if($("photo").files[0]&&!photoData)photoData=await readPhoto();
+  if(photoData){
+   const requestId=crypto.randomUUID();
+   await post("photo",{requestId,image:photoData});
+   let result;
+   for(let i=0;i<12;i++){
+    await new Promise(r=>setTimeout(r,1500));
+    result=await jsonp("photo_"+requestId);
+    if(result.status==="done")break;
+    if(result.status==="error")throw Error(result.error);
+   }
+   if(result?.status!=="done")throw Error("사진 저장 확인 실패");
+   data.imageUrl=result.url;
+  }
+  await post("save",data);
+  await new Promise(r=>setTimeout(r,1500));
+  await load();
+  if(!yarns.some(y=>y.id===data.id))throw Error("저장 확인 실패. 잠시 후 새로고침해 주세요.");
+  $("editor").close();
+ }catch(e){$("editorStatus").textContent=e.message;}
+}
+
+async function changeStock(id,delta){
+ const y=yarns.find(x=>x.id===id);
+ if(!y)return;
+ if(Number(y.quantity)+delta<0)return;
+ try{
+  await post("stock",{id,delta});
+  await new Promise(r=>setTimeout(r,1200));
+  await load();
+ }catch(e){alert(e.message);}
+}
+
+$("search").oninput=render;
+$("weightFilter").onchange=render;
+$("colorFilter").onchange=render;
+load();
+</script>
+</body>
+</html>
